@@ -49,42 +49,40 @@ def mbps(section):
     return round(float(value) / 1_000_000, 3) if value is not None else ""
 
 
-def ping_worker(args, stop, lock, active):
-    f, writer = csv_file(args.output / "ping.csv", PING_FIELDS)
-    try:
-        due = time.monotonic()
-        while not stop.is_set():
-            timestamp = now_utc()
-            # Classify by when the ICMP request is sent, not when its reply arrives.
-            with lock:
-                test_id = active["id"]
-                direction = active["direction"]
-            row = dict(timestamp_utc=timestamp, host=args.ping_host,
-                       status="lost", rtt_ms="", during_iperf=int(bool(test_id)),
-                       test_id=test_id, direction=direction, error="")
-            try:
-                result = subprocess.run(
-                    ["ping", "-n", "-c", "1", "-W", "1", args.ping_host],
-                    capture_output=True, text=True, timeout=3,
-                )
-                match = RTT_RE.search(result.stdout)
-                if result.returncode == 0 and match:
-                    row["status"] = "ok"
-                    row["rtt_ms"] = match.group(1)
-                elif result.returncode != 1:
-                    row["status"] = "error"
-                    row["error"] = clean_error(result.stderr or result.stdout)
-            except (OSError, subprocess.TimeoutExpired) as exc:
+def ping_worker(args, host, stop, lock, active, writer, csv_file_handle, csv_lock):
+    due = time.monotonic()
+    while not stop.is_set():
+        timestamp = now_utc()
+        # Classify by when the ICMP request is sent, not when its reply arrives.
+        with lock:
+            test_id = active["id"]
+            direction = active["direction"]
+        row = dict(timestamp_utc=timestamp, host=host,
+                   status="lost", rtt_ms="", during_iperf=int(bool(test_id)),
+                   test_id=test_id, direction=direction, error="")
+        try:
+            result = subprocess.run(
+                ["ping", "-n", "-c", "1", "-W", "1", host],
+                capture_output=True, text=True, timeout=3,
+            )
+            match = RTT_RE.search(result.stdout)
+            if result.returncode == 0 and match:
+                row["status"] = "ok"
+                row["rtt_ms"] = match.group(1)
+            elif result.returncode != 1:
                 row["status"] = "error"
-                row["error"] = clean_error(exc)
+                row["error"] = clean_error(result.stderr or result.stdout)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            row["status"] = "error"
+            row["error"] = clean_error(exc)
+        # Multiple ping threads share one CSV writer, so writes must be atomic.
+        with csv_lock:
             writer.writerow(row)
-            f.flush()
-            due += args.ping_interval
-            if due < time.monotonic():
-                due = time.monotonic()  # Never build up a backlog.
-            stop.wait(max(0, due - time.monotonic()))
-    finally:
-        f.close()
+            csv_file_handle.flush()
+        due += args.ping_interval
+        if due < time.monotonic():
+            due = time.monotonic()  # Never build up a backlog.
+        stop.wait(max(0, due - time.monotonic()))
 
 
 def iperf_worker(args, stop, lock, active):
@@ -149,7 +147,8 @@ def iperf_worker(args, stop, lock, active):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("host", help="iperf3 server hostname or IP")
-    parser.add_argument("--ping-host", help="ICMP target (default: iperf3 host)")
+    parser.add_argument("--ping-host", dest="ping_hosts", action="append", metavar="HOST",
+                        help="ICMP target; repeat for multiple hosts (default: iperf3 host)")
     parser.add_argument("--output", type=Path, default=Path("./nettest-logs"))
     parser.add_argument("--port", type=int, default=5201)
     parser.add_argument("--period", type=float, default=600, help="seconds between test cycles")
@@ -159,7 +158,7 @@ def main():
     args = parser.parse_args()
     if args.period <= 0 or args.duration <= 0 or args.ping_interval <= 0:
         parser.error("period, duration and ping-interval must be positive")
-    args.ping_host = args.ping_host or args.host
+    args.ping_hosts = list(dict.fromkeys(args.ping_hosts or [args.host]))
     args.output.mkdir(parents=True, exist_ok=True)
 
     stop = threading.Event()
@@ -167,15 +166,22 @@ def main():
     active = {"id": "", "direction": ""}
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
     signal.signal(signal.SIGINT, lambda *_: stop.set())
+    ping_log, ping_writer = csv_file(args.output / "ping.csv", PING_FIELDS)
+    csv_lock = threading.Lock()
     threads = [
-        threading.Thread(target=ping_worker, args=(args, stop, lock, active)),
-        threading.Thread(target=iperf_worker, args=(args, stop, lock, active)),
+        threading.Thread(target=ping_worker,
+                         args=(args, host, stop, lock, active, ping_writer, ping_log, csv_lock))
+        for host in args.ping_hosts
     ]
-    for thread in threads:
-        thread.start()
-    print(f"Logging to {args.output.resolve()} (Ctrl+C to stop)", flush=True)
-    for thread in threads:
-        thread.join()
+    threads.append(threading.Thread(target=iperf_worker, args=(args, stop, lock, active)))
+    try:
+        for thread in threads:
+            thread.start()
+        print(f"Logging to {args.output.resolve()} (Ctrl+C to stop)", flush=True)
+        for thread in threads:
+            thread.join()
+    finally:
+        ping_log.close()
 
 
 if __name__ == "__main__":
