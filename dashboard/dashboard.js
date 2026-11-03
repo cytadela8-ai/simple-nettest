@@ -216,26 +216,36 @@ function applyRange() {
   render(start, end);
 }
 
-async function loadLog(input, fields, decode) {
-  const kind = input.id;
-  const file = input.files[0];
-  if (!file) return;
-  const inputs = [byId("ping"), byId("iperf")];
-  inputs.forEach(control => { control.disabled = true; });
-  byId("range").disabled = true;
-  statusLine.textContent = `Reading ${file.name}…`;
+async function loadLog(kind, fields, decode) {
+  const name = kind + ".csv";
   try {
-    const {rows, skipped} = await readCSV(file, fields, decode);
+    const response = await fetch("logs/" + name, {cache: "no-store"});
+    if (response.status === 404) {
+      logs[kind] = [];
+      warnings[kind] = name + " is not available yet.";
+      return;
+    }
+    if (!response.ok) throw new Error("HTTP " + response.status);
+    const {rows, skipped} = await readCSV(await response.blob(), fields, decode);
     logs[kind] = rows;
-    warnings[kind] = skipped ? `${file.name}: skipped ${skipped} invalid rows.` :
-      rows.length ? "" : `${file.name}: no data rows.`;
+    warnings[kind] = skipped ? name + ": skipped " + skipped + " invalid rows." :
+      rows.length ? "" : name + ": no data rows.";
   } catch (error) {
-    logs[kind] = [];
-    warnings[kind] = `${file.name}: ${error.message || "unable to read CSV"}.`;
-  } finally {
-    input.value = "";
-    inputs.forEach(control => { control.disabled = false; });
+    warnings[kind] = name + ": " + (error.message || "unable to read CSV") +
+      (logs[kind].length ? " (showing previously loaded data)." : ".");
   }
+}
+
+async function refreshLogs() {
+  const reload = byId("reload");
+  reload.disabled = true;
+  byId("range").disabled = true;
+  statusLine.textContent = "Loading logs from the collector…";
+  await Promise.all([
+    loadLog("ping", ["timestamp_utc", "status", "rtt_ms", "during_iperf"], pingRow),
+    loadLog("iperf", ["start_utc", "direction", "status", "receiver_mbps"], iperfRow),
+  ]);
+  reload.disabled = false;
 
   const previousHost = host.value;
   const hosts = [...new Set(logs.ping.map(row => row.host))].sort();
@@ -256,14 +266,10 @@ async function loadLog(input, fields, decode) {
 }
 
 if (typeof Papa === "undefined" || typeof echarts === "undefined") {
-  statusLine.textContent = "Could not load the dashboard libraries. Check access to cdn.jsdelivr.net and reload.";
-  byId("ping").disabled = true;
-  byId("iperf").disabled = true;
+  statusLine.textContent = "Could not load the dashboard libraries. Check the dashboard installation.";
+  byId("reload").disabled = true;
 } else {
-  byId("ping").addEventListener("change", event =>
-    loadLog(event.target, ["timestamp_utc", "status", "rtt_ms", "during_iperf"], pingRow));
-  byId("iperf").addEventListener("change", event =>
-    loadLog(event.target, ["start_utc", "direction", "status", "receiver_mbps"], iperfRow));
+  byId("reload").addEventListener("click", refreshLogs);
   byId("filters").addEventListener("submit", event => {
     event.preventDefault();
     activePreset = null;
@@ -276,4 +282,5 @@ if (typeof Papa === "undefined" || typeof echarts === "undefined") {
   document.querySelectorAll("[data-hours]").forEach(button =>
     button.addEventListener("click", () => applyPreset(Number(button.dataset.hours))));
   new ResizeObserver(() => Object.values(charts).forEach(chart => chart.resize())).observe(byId("results"));
+  refreshLogs();
 }

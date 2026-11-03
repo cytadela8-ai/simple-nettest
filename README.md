@@ -1,74 +1,68 @@
 # simple-nettest
 
-Continuous ICMP pings (one per second **per host**) and periodic `iperf3` TCP upload/download tests. Logs to `ping.csv` and `iperf.csv`; each ping includes its `host`, `during_iperf` flag, and matching `test_id`/direction.
+Continuous ICMP pings and periodic iperf3 tests. The dashboard compares latency
+and packet loss during idle, upload, and download, and plots iperf3 throughput.
 
-## Install (Debian LXC / VM)
+## Install on Debian / Ubuntu (systemd)
+
+On the remote iperf3 endpoint, run `iperf3 -s` and allow TCP port 5201.
+
+On the collector (for example, a Proxmox LXC or VM):
 
 ```sh
-apt update && apt install -y git python3 iputils-ping iperf3
+sudo apt-get install -y git
 git clone https://github.com/cytadela8-ai/simple-nettest.git
 cd simple-nettest
+sudo ./install.sh -- 192.168.1.100 --ping-host 192.168.1.1 --ping-host 1.1.1.1
 ```
 
-The dashboard needs only a browser. See [View results](#view-results) below.
+Open **http://COLLECTOR_IP:8000/** from your other machine. The dashboard loads
+both CSVs automatically. Use **Refresh logs** to pick up new measurements. Pick a
+host and time range to see min, mean (avg), p90, p95, p99, max and loss. The time
+range uses your browser's local time zone. The chart slider zooms the plot.
+Use the date controls to recalculate the summary.
 
-On the **iperf3 server**, run `iperf3 -s` (allow TCP port 5201).
+The installer enables `nettest.service` and `nettest-dashboard.service` at boot.
+It installs missing dependencies and downloads the pinned chart libraries from
+jsDelivr at install or upgrade time. The browser loads the libraries and logs
+from the collector. The dashboard server uses Python's standard library.
 
-## Run
-
-```sh
-python3 nettest.py 192.168.1.100 \
-  --ping-host 192.168.1.1 --ping-host 1.1.1.1 --ping-host 8.8.8.8 \
-  --output ./logs
-```
-
-`192.168.1.100` is the iperf3 server. Repeat `--ping-host` for each ping target; without it, the iperf3 server is pinged. Press Ctrl+C to stop.
-
-## Options
-
-| Option | Default | Meaning |
-|---|---|---|
-| `--ping-host HOST` | iperf3 server | Ping target; repeat to add hosts |
-| `--ping-interval SEC` | `1` | Seconds between pings **per host** |
-| `--period SEC` | `600` | Seconds between iperf test cycles |
-| `--duration SEC` | `20` | Seconds per iperf direction |
-| `--direction` | `both` | `upload`, `download` or `both` |
-| `--port PORT` | `5201` | iperf3 server port |
-| `--output DIR` | `./nettest-logs` | Directory for CSV logs |
-
-## Start on boot (optional)
-
-```sh
-install -Dm755 nettest.py /opt/nettest/nettest.py
-install -Dm644 systemd/nettest.service /etc/systemd/system/nettest.service
-nano /etc/systemd/system/nettest.service  # edit ExecStart: server IP and --ping-host flags
-systemctl daemon-reload && systemctl enable --now nettest
-```
-
-CSV timestamps are UTC; `ping.csv` has one row per ping attempt, and `iperf.csv` has one row per speed test.
-
-## View results
-
-Open `dashboard/index.html` in your browser and select `ping.csv` and optionally
-`iperf.csv` from your `--output` directory. If the collector is remote, copy
-the CSVs to your workstation first. Select the files again to load fresh data.
-
-The page loads pinned ECharts and Papa Parse scripts from jsDelivr. CSVs are
-processed in your browser. No Flask, package install, or build step is required.
-To serve the dashboard locally instead of opening the file directly, run:
-
-```sh
-python3 -m http.server 8000 --bind 127.0.0.1 --directory dashboard
-```
-
-Open <http://localhost:8000>. Pick a host and time range in your browser's local
-time zone. The latency table uses all matching successful pings and splits
-results by idle, upload, and download. Percentiles use linear interpolation.
-The plot retains the minimum and maximum in each time bucket on dense views.
-The chart slider zooms the plot. Use the date controls to recalculate the table.
+The dashboard serves unauthenticated HTTP. Use it on a trusted LAN or VPN.
+Pass `--bind 192.168.1.50 --dashboard-port 8080` **before** `--` to change the
+listener. Pass `--log-dir /path/to/logs` before `--` to change the CSV directory.
+The default directory is `/var/log/nettest`.
 
 ## Upgrade
 
-In your existing checkout, run `git pull --ff-only` and open
-`dashboard/index.html`. Use your existing CSVs directly. The running collector
-and any systemd installation can keep running during this upgrade.
+```sh
+git pull --ff-only
+sudo ./install.sh
+```
+
+An existing `nettest.service` keeps its command line and continues logging. If
+its `--output` differs from `/var/log/nettest`, run the first dashboard install
+with `sudo ./install.sh --log-dir /path/to/logs` instead. The dashboard service
+needs read access to both CSVs and traversal access to their directory. On later
+upgrades, omit dashboard options to keep its listener and log directory. When
+changing settings, pass all non-default dashboard options together.
+
+For a manually started collector, stop that process before installing a
+collector service using the install command above. Pass its existing log
+directory to the installer with `--log-dir` to keep using the same CSVs.
+
+## Collector options
+
+Pass these after the server address. Repeat `--ping-host` for each ping target.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--ping-host HOST` | iperf3 server | Ping target |
+| `--ping-interval SEC` | `1` | Interval per ping target |
+| `--period SEC` | `600` | Interval between iperf3 cycles |
+| `--duration SEC` | `20` | Test length per direction |
+| `--direction` | `both` | `upload`, `download`, or `both` |
+| `--port PORT` | `5201` | iperf3 server port |
+
+Use `python3 nettest.py --help` for standalone collector usage. To inspect the
+services, run `systemctl status nettest nettest-dashboard` or
+`journalctl -u nettest -u nettest-dashboard -n 50`.
