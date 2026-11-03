@@ -1,0 +1,13 @@
+[Unit]
+Description=Continuous ICMP and iperf3 CSV network testing
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/nettest/nettest.py 192.168.1.100 --output /var/log/nettest
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
