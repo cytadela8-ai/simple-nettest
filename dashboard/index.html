@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Simple Nettest | Results</title>
+  <link rel="stylesheet" href="style.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/papaparse@5.5.3/papaparse.min.js"></script>
+  <script defer src="dashboard.js"></script>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">SIMPLE NETTEST</p>
+      <h1>Network results</h1>
+      <p>Explore latency, packet loss, and throughput from your CSV logs.</p>
+    </header>
+    <section class="panel" aria-label="Data and filters">
+      <div class="controls">
+        <label>Ping log <input type="file" id="ping" accept=".csv,text/csv"></label>
+        <label>iperf3 log (optional) <input type="file" id="iperf" accept=".csv,text/csv"></label>
+      </div>
+      <form id="filters">
+        <fieldset id="range" disabled>
+          <div class="controls">
+            <label>Ping host <select id="host"></select></label>
+            <label>From <input id="from" type="datetime-local" step="1" required></label>
+            <label>To <input id="to" type="datetime-local" step="1" required></label>
+            <button type="submit">Apply range</button>
+          </div>
+          <div class="presets">
+            <span>Local time · Ending at latest logged sample</span>
+            <button type="button" data-hours="1">Last hour</button>
+            <button type="button" data-hours="24">Last 24h</button>
+            <button type="button" data-hours="168">Last 7 days</button>
+            <button type="button" data-hours="0">All data</button>
+          </div>
+        </fieldset>
+      </form>
+      <p id="status" role="status">Select a ping.csv or iperf.csv file to begin.</p>
+    </section>
+    <div id="results" hidden>
+      <section class="panel" id="ping-results">
+        <h2>Latency summary</h2>
+        <p>RTT in milliseconds. Packet loss is lost requests divided by replies plus lost requests. Probe errors are counted separately.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th scope="col">Traffic</th><th scope="col">Replies</th><th scope="col">Lost</th><th scope="col">Loss</th><th scope="col">Errors</th><th scope="col">Min</th><th scope="col">Mean (avg)</th><th scope="col">P90</th><th scope="col">P95</th><th scope="col">P99</th><th scope="col">Max</th></tr></thead>
+            <tbody id="stats"></tbody>
+          </table>
+        </div>
+        <h2>Ping RTT over time</h2>
+        <p>Use the legend to isolate traffic types. Dense views show each bucket's minimum and maximum. The zoom slider changes the plot view only.</p>
+        <div class="chart" id="latency" aria-label="Ping latency in milliseconds"></div>
+      </section>
+      <section class="panel" id="iperf-results">
+        <h2>iperf3 throughput</h2>
+        <p id="throughput-info"></p>
+        <div class="chart" id="throughput" aria-label="iperf3 receiver throughput in megabits per second"></div>
+      </section>
+    </div>
+  </main>
+</body>
+</html>
